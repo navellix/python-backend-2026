@@ -1,44 +1,60 @@
 from typing import Iterable
 
+from sqlmodel import select
+
+from .database import get_session
+from .db_models import CartDB, CartItemDB, ItemDB
 from .models import Cart, Item
 
 
-_items: dict[int, Item] = {}
-_carts: dict[int, Cart] = {}
-
-
-def int_id_generator() -> Iterable[int]:
-    i = 0
-
-    while True:
-        yield i
-        i += 1
-
-
-_item_id_generator = int_id_generator()
-_cart_id_generator = int_id_generator()
-
-
 def add_item(name: str, price: float) -> Item:
-    item_id = next(_item_id_generator)
+    with get_session() as session:
+        item_db = ItemDB(
+            name=name,
+            price=price,
+        )
 
-    item = Item(
-        id=item_id,
-        name=name,
-        price=price,
-    )
+        session.add(item_db)
+        session.commit()
+        session.refresh(item_db)
 
-    _items[item_id] = item
-
-    return item
+        return Item(
+            id=item_db.id,
+            name=item_db.name,
+            price=item_db.price,
+            deleted=item_db.deleted,
+        )
 
 
 def get_item(item_id: int) -> Item | None:
-    return _items.get(item_id)
+    with get_session() as session:
+        item_db = session.get(ItemDB, item_id)
+
+        if item_db is None:
+            return None
+
+        return Item(
+            id=item_db.id,
+            name=item_db.name,
+            price=item_db.price,
+            deleted=item_db.deleted,
+        )
 
 
 def get_all_items() -> Iterable[Item]:
-    return _items.values()
+    with get_session() as session:
+        statement = select(ItemDB)
+        items = session.exec(statement).all()
+
+        return [
+            Item(
+                id=item.id,
+                name=item.name,
+                price=item.price,
+                deleted=item.deleted,
+            )
+            for item in items
+        ]
 
 
 def update_item(
@@ -46,15 +62,25 @@ def update_item(
     name: str,
     price: float,
 ) -> Item | None:
-    item = _items.get(item_id)
+    with get_session() as session:
+        item_db = session.get(ItemDB, item_id)
 
-    if item is None or item.deleted:
-        return None
+        if item_db is None or item_db.deleted:
+            return None
 
-    item.name = name
-    item.price = price
+        item_db.name = name
+        item_db.price = price
 
-    return item
+        session.add(item_db)
+        session.commit()
+        session.refresh(item_db)
+
+        return Item(
+            id=item_db.id,
+            name=item_db.name,
+            price=item_db.price,
+            deleted=item_db.deleted,
+        )
 
 
 def patch_item(
@@ -62,57 +88,125 @@ def patch_item(
     name: str | None = None,
     price: float | None = None,
 ) -> Item | None:
-    item = _items.get(item_id)
+    with get_session() as session:
+        item_db = session.get(ItemDB, item_id)
 
-    if item is None or item.deleted:
-        return None
+        if item_db is None or item_db.deleted:
+            return None
 
-    if name is not None:
-        item.name = name
+        if name is not None:
+            item_db.name = name
 
-    if price is not None:
-        item.price = price
+        if price is not None:
+            item_db.price = price
 
-    return item
+        session.add(item_db)
+        session.commit()
+        session.refresh(item_db)
+
+        return Item(
+            id=item_db.id,
+            name=item_db.name,
+            price=item_db.price,
+            deleted=item_db.deleted,
+        )
 
 
 def delete_item(item_id: int) -> None:
-    item = _items.get(item_id)
+    with get_session() as session:
+        item_db = session.get(ItemDB, item_id)
 
-    if item is not None:
-        item.deleted = True
+        if item_db is not None:
+            item_db.deleted = True
+            session.add(item_db)
+            session.commit()
 
 
 def add_cart() -> Cart:
-    cart_id = next(_cart_id_generator)
+    with get_session() as session:
+        cart_db = CartDB()
 
-    cart = Cart(id=cart_id)
-    _carts[cart_id] = cart
+        session.add(cart_db)
+        session.commit()
+        session.refresh(cart_db)
 
-    return cart
+        return Cart(id=cart_db.id)
 
 
 def get_cart(cart_id: int) -> Cart | None:
-    return _carts.get(cart_id)
+    with get_session() as session:
+        cart_db = session.get(CartDB, cart_id)
+
+        if cart_db is None:
+            return None
+
+        statement = select(CartItemDB).where(
+            CartItemDB.cart_id == cart_id
+        )
+
+        cart_items = session.exec(statement).all()
+
+        return Cart(
+            id=cart_db.id,
+            items={
+                item.item_id: item.quantity
+                for item in cart_items
+            },
+        )
 
 
 def get_all_carts() -> Iterable[Cart]:
-    return _carts.values()
+    with get_session() as session:
+        carts = session.exec(select(CartDB)).all()
+
+        result = []
+
+        for cart_db in carts:
+            statement = select(CartItemDB).where(
+                CartItemDB.cart_id == cart_db.id
+            )
+
+            cart_items = session.exec(statement).all()
+
+            result.append(
+                Cart(
+                    id=cart_db.id,
+                    items={
+                        item.item_id: item.quantity
+                        for item in cart_items
+                    },
+                )
+            )
+
+        return result
 
 
 def add_item_to_cart(
     cart_id: int,
     item_id: int,
 ) -> bool:
-    cart = _carts.get(cart_id)
-    item = _items.get(item_id)
+    with get_session() as session:
+        cart_db = session.get(CartDB, cart_id)
+        item_db = session.get(ItemDB, item_id)
 
-    if cart is None or item is None or item.deleted:
-        return False
+        if cart_db is None or item_db is None or item_db.deleted:
+            return False
 
-    if item_id in cart.items:
-        cart.items[item_id] += 1
-    else:
-        cart.items[item_id] = 1
+        cart_item = session.get(
+            CartItemDB,
+            (cart_id, item_id),
+        )
 
-    return True
+        if cart_item is None:
+            cart_item = CartItemDB(
+                cart_id=cart_id,
+                item_id=item_id,
+                quantity=1,
+            )
+        else:
+            cart_item.quantity += 1
+
+        session.add(cart_item)
+        session.commit()
+
+        return True
