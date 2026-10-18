@@ -6,7 +6,7 @@ from . import db_models
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql://shop:shop@localhost:5432/shop",
+    "postgresql+psycopg2://shop:shop@localhost:5432/shop",
 )
 
 engine = create_engine(DATABASE_URL)
